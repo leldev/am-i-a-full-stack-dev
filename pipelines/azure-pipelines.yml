@@ -1,0 +1,54 @@
+trigger:
+  branches:
+    include:
+      - master
+
+variables:
+  appName: lel
+  # azureSubscriptionId: 00000000-0000-0000-0000-000000000000
+  # azureResourceManagerConnection: Azure-Service-Connection
+  targetEnvironmentPrefix: lel
+
+pool:
+  vmImage: windows-latest
+
+stages:
+  - stage: Build
+    displayName: Build
+    jobs:
+      - template: /pipelines/templates/build-bicep-template.yml
+      - template: /pipelines/templates/build-api-template.yml
+      - template: /pipelines/templates/build-ui-template.yml
+        parameters:
+          buildConfig:
+            shortEnvironment: dev
+      # - template: /pipelines/templates/build-ui-template.yml
+      #   parameters:
+      #     buildConfig:
+      #       shortEnvironment: test
+
+  - stage: DeployToDev
+    displayName: Deploy to Dev
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - template: /pipelines/templates/deploy-template.yml
+        parameters:
+          deployConfig:
+            targetEnvironmentPrefix: $(targetEnvironmentPrefix)
+            shortEnvironment: dev
+            azureResourceManagerConnection: $(azureResourceManagerConnection)
+            subscriptionId: $(azureSubscriptionId)
+
+  - stage: DeployToTest
+    displayName: Deploy to Test
+    dependsOn: DeployToDev
+    condition: succeeded()
+    jobs:
+      - template: /pipelines/templates/deploy-template.yml
+        parameters:
+          deployConfig:
+            targetEnvironmentPrefix: $(targetEnvironmentPrefix)
+            shortEnvironment: test
+            azureResourceManagerConnection: $(azureResourceManagerConnection)
+            subscriptionId: $(azureSubscriptionId)

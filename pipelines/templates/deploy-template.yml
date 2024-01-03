@@ -1,0 +1,196 @@
+# yaml-language-server: $schema=http://json-schema.org/draft-07/schema#
+
+parameters:
+  - name: deployConfig
+    type: object
+    default: {}
+
+jobs:
+  - deployment: DeployBicep
+    displayName: Deploy BICEP to ${{ parameters.deployConfig.shortEnvironment }}
+    environment: ${{ parameters.deployConfig.targetEnvironmentPrefix }}-${{ parameters.deployConfig.shortEnvironment }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - task: DownloadBuildArtifacts@1
+              displayName: Download artifact
+              inputs:
+                buildType: current
+                downloadType: single
+                artifactName: $(Build.DefinitionName)
+                itemPattern: $(Build.DefinitionName)/**
+                downloadPath: $(Build.ArtifactStagingDirectory)
+            - task: AzureResourceManagerTemplateDeployment@3
+              displayName: Deploy bicep to ${{ parameters.deployConfig.shortEnvironment }}
+              inputs:
+                deploymentScope: Subscription
+                azureResourceManagerConnection: ${{ parameters.deployConfig.azureResourceManagerConnection }}
+                deploymentOutputs: armDeployOutputs
+                subscriptionId: ${{ parameters.deployConfig.subscriptionId }}
+                location: East US
+                csmFile: $(Build.ArtifactStagingDirectory)/$(Build.DefinitionName)/pipelines/bicep/main.bicep
+                csmParametersFile: $(Build.ArtifactStagingDirectory)/$(Build.DefinitionName)/pipelines/bicep/main.${{ parameters.deployConfig.shortEnvironment }}.parameters.json
+            - task: PowerShell@2
+              displayName: Read bicep outputs
+              inputs:
+                targetType: inline
+                script: |
+                  echo '$(armDeployOutputs)'
+                  $bicepOutputs = ConvertFrom-Json '$(armDeployOutputs)'
+
+                  $resourceGroupName = $bicepOutputs.resourceGroupName.value
+                  $webAppPrincipalId = $bicepOutputs.webApplication.value.identity.principalId
+                  $webAppName = $bicepOutputs.webApplication.value.properties.name
+                  $sqlDatabaseName = $bicepOutputs.sqlDatabaseName.value
+                  $sqlFullServerName = $bicepOutputs.sqlDatabase.value.properties.fullyQualifiedDomainName
+                  $staticWebAppName = $bicepOutputs.staticWebAppName.value
+                  $frontDoorHostName =  $bicepOutputs.frontDoorEndpoint.value.properties.hostName
+                  $frontDoorWebUrl = "https://" + $frontDoorHostName
+                  $frontDoorApiUrl = $frontDoorWebUrl + "/api"
+                  $domainHostName =  $bicepOutputs.domain.value.properties.hostName
+                  $domainWebUrl = "https://" + $domainHostName
+                  $domainApiUrl = $domainWebUrl + "/api"
+
+                  echo $resourceGroupName
+                  echo $webAppPrincipalId
+                  echo $webAppName
+                  echo $sqlDatabaseName
+                  echo $sqlFullServerName
+                  echo $staticWebAppName
+                  echo $frontDoorHostName
+                  echo $frontDoorWebUrl
+                  echo $frontDoorApiUrl
+                  echo $domainHostName
+                  echo $domainWebUrl
+                  echo $domainApiUrl
+
+                  echo "##vso[task.setvariable variable=resourceGroupName;isOutput=true]$resourceGroupName"
+                  echo "##vso[task.setvariable variable=sqlFullServerName;isOutput=true]$sqlFullServerName"
+                  echo "##vso[task.setvariable variable=webAppPrincipalId;isOutput=true]$webAppPrincipalId"
+                  echo "##vso[task.setvariable variable=webAppName;isOutput=true]$webAppName"
+                  echo "##vso[task.setvariable variable=sqlDatabaseName;isOutput=true]$sqlDatabaseName"
+                  echo "##vso[task.setvariable variable=staticWebAppName;isOutput=true]$staticWebAppName"
+                  echo "##vso[task.setvariable variable=frontDoorWebUrl;isOutput=true]$frontDoorWebUrl"
+                  echo "##vso[task.setvariable variable=domainWebUrl;isOutput=true]$domainWebUrl"
+
+  - deployment: DeployAPI
+    displayName: Deploy API to ${{ parameters.deployConfig.shortEnvironment }}
+    dependsOn: DeployBicep
+    variables:
+      resourceGroupName: $[ dependencies.DeployBicep.outputs['DeployBicep.PowerShell.resourceGroupName'] ]
+      sqlFullServerName: $[ dependencies.DeployBicep.outputs['DeployBicep.PowerShell.sqlFullServerName'] ]
+      webAppName: $[ dependencies.DeployBicep.outputs['DeployBicep.PowerShell.webAppName'] ]
+      webAppPrincipalId: $[ dependencies.DeployBicep.outputs['DeployBicep.PowerShell.webAppPrincipalId'] ]
+      sqlDatabaseName: $[ dependencies.DeployBicep.outputs['DeployBicep.PowerShell.sqlDatabaseName'] ]
+      frontDoorWebUrl: $[ dependencies.DeployBicep.outputs['DeployBicep.PowerShell.frontDoorWebUrl'] ]
+      domainWebUrl: $[ dependencies.DeployBicep.outputs['DeployBicep.PowerShell.domainWebUrl'] ]
+    environment: ${{ parameters.deployConfig.targetEnvironmentPrefix }}-${{ parameters.deployConfig.shortEnvironment }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - task: DownloadBuildArtifacts@1
+              displayName: Download artifact
+              inputs:
+                buildType: current
+                downloadType: single
+                artifactName: $(Build.DefinitionName)
+                itemPattern: $(Build.DefinitionName)/**
+                downloadPath: $(Build.ArtifactStagingDirectory)
+            - task: AzureCLI@2
+              displayName: Get web app id from principal
+              inputs:
+                azureSubscription: ${{ parameters.deployConfig.azureResourceManagerConnection }}
+                scriptType: ps
+                scriptLocation: inlineScript
+                inlineScript: |
+                  $webAppId = az ad sp show --id $(webAppPrincipalId) --query appId --output tsv
+                  echo $webAppId
+                  Write-Host "##vso[task.setvariable variable=webAppId]$webAppId"
+            - task: AzurePowerShell@5
+              displayName: Get access token in the context of service principal
+              inputs:
+                azureSubscription: ${{ parameters.deployConfig.azureResourceManagerConnection }}
+                ScriptType: InlineScript
+                Inline: |
+                  $context = [Microsoft.Azure.Commands.Common.Authentication.Abstractions.AzureRmProfileProvider]::Instance.Profile.DefaultContext
+                  $sqlToken = [Microsoft.Azure.Commands.Common.Authentication.AzureSession]::Instance.AuthenticationFactory.Authenticate($context.Account, $context.Environment, $context.Tenant.Id.ToString(), $null, [Microsoft.Azure.Commands.Common.Authentication.ShowDialog]::Never, $null, "https://database.windows.net").AccessToken
+                  echo $sqlToken
+                  Write-Host ("##vso[task.setvariable variable=sqlToken;issecret=true]$sqlToken")
+                azurePowerShellVersion: LatestVersion
+            - task: PowerShell@2
+              displayName: Add web app identity to SQL
+              inputs:
+                filePath: $(Build.ArtifactStagingDirectory)/$(Build.DefinitionName)/pipelines/bicep/scripts/AddManagedIdentity.ps1
+                arguments: -sqlServerName $(sqlFullServerName) -sqlDatabaseName $(sqlDatabaseName) -apiAppName $(webAppName) -accessToken $(sqlToken) -apiAppManagedIdentityPrincipalId $(webAppId)
+            - task: SqlAzureDacpacDeployment@1
+              displayName: Run EF migration script
+              enabled: true
+              inputs:
+                azureSubscription: ${{ parameters.deployConfig.azureResourceManagerConnection }}
+                AuthenticationType: servicePrincipal
+                ServerName: $(sqlFullServerName)
+                DatabaseName: $(sqlDatabaseName)
+                deployType: SqlTask
+                SqlFile: $(Build.ArtifactStagingDirectory)/$(Build.DefinitionName)/Migration.sql
+                IpDetectionMethod: AutoDetect
+            - task: AzureRmWebAppDeployment@4
+              displayName: "Azure web deploy"
+              inputs:
+                ConnectionType: AzureRM
+                azureSubscription: ${{ parameters.deployConfig.azureResourceManagerConnection }}
+                appType: webApp
+                WebAppName: $(webAppName)
+                packageForLinux: "$(Build.ArtifactStagingDirectory)/**/api/$(Build.BuildId).zip"
+                DeploymentType: zipDeploy
+            - task: AzureCLI@2
+              displayName: Configure web CORS
+              inputs:
+                azureSubscription: ${{ parameters.deployConfig.azureResourceManagerConnection }}
+                scriptType: ps
+                scriptLocation: inlineScript
+                inlineScript: |
+                  az webapp cors add --resource-group $(resourceGroupName) --name $(webAppName) --allowed-origins $(frontDoorWebUrl) $(domainWebUrl)
+
+  - deployment: DeployUI
+    displayName:  Deploy UI to ${{ parameters.deployConfig.shortEnvironment }}
+    dependsOn: DeployBicep
+    variables:
+      resourceGroupName: $[ dependencies.DeployBicep.outputs['DeployBicep.PowerShell.resourceGroupName'] ]
+      staticWebAppName: $[ dependencies.DeployBicep.outputs['DeployBicep.PowerShell.staticWebAppName'] ]
+    pool:
+      vmImage: ubuntu-latest
+    environment: ${{ parameters.deployConfig.targetEnvironmentPrefix }}-${{ parameters.deployConfig.shortEnvironment }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - task: DownloadBuildArtifacts@1
+              displayName: Download artifact
+              inputs:
+                buildType: current
+                downloadType: single
+                artifactName: $(Build.DefinitionName)
+                itemPattern: $(Build.DefinitionName)/**
+                downloadPath: $(Build.ArtifactStagingDirectory)
+            - task: AzureCLI@2
+              displayName: Get web site key
+              inputs:
+                azureSubscription: ${{ parameters.deployConfig.azureResourceManagerConnection }}
+                scriptType: bash
+                scriptLocation: inlineScript
+                inlineScript: |
+                  webApiKey=$(az staticwebapp secrets list --name $(staticWebAppName) --query properties.apiKey --output tsv)
+                  echo $webApiKey
+                  echo "##vso[task.setvariable variable=webApiKey;issecret=true]$webApiKey"
+            - task: AzureStaticWebApp@0
+              displayName: Deploy to Dev Static Web App
+              inputs:
+                workingDirectory:  $(Build.ArtifactStagingDirectory)/$(Build.DefinitionName)/ui${{ parameters.deployConfig.shortEnvironment }}
+                app_location: /
+                is_static_export: true
+                skip_app_build: true
+                skip_api_build: true
+                verbose: true
+                azure_static_web_apps_api_token: $(webApiKey)
