@@ -1,0 +1,61 @@
+# yaml-language-server: $schema=http://json-schema.org/draft-07/schema#
+
+parameters:
+  - name: buildConfig
+    type: object
+    default: {}
+
+jobs:
+  - job:
+    displayName: Build UI ${{ parameters.buildConfig.shortEnvironment }}
+    variables:
+      - group: LEL-${{ parameters.buildConfig.shortEnvironment }}
+    steps:
+      - task: replacetokens@5
+        displayName: Replace Tokens in env file
+        inputs:
+          rootDirectory: $(System.DefaultWorkingDirectory)
+          targetFiles: |
+            **/.env.${{ parameters.buildConfig.shortEnvironment }}
+          encoding: auto
+          tokenPattern: custom
+          tokenPrefix: __
+          tokenSuffix: __
+          writeBOM: true
+          verbosity: 'detailed'
+          actionOnMissing: 'warn'
+          keepToken: false
+          actionOnNoFiles: continue
+          enableTransforms: false
+          enableRecursion: false
+          useLegacyPattern: false
+          enableTelemetry: true
+      - task: NodeTool@0
+        displayName: Install node
+        inputs:
+          versionSpec: |
+            20.10.0
+      - task: CmdLine@2
+        displayName: npm install
+        inputs:
+          script: |
+            npm install --legacy-peer-deps
+          workingDirectory: $(Build.SourcesDirectory)/front
+      - task: CmdLine@2
+        displayName: npm build ${{ parameters.buildConfig.shortEnvironment }}
+        inputs:
+          script: |
+            npm run build-${{ parameters.buildConfig.shortEnvironment }}
+          workingDirectory: $(Build.SourcesDirectory)/front
+      - task: CopyFiles@2
+        displayName: Copy files
+        inputs:
+          sourceFolder: $(Build.SourcesDirectory)/front/out
+          Contents: |
+            **/*
+          TargetFolder: $(Build.ArtifactStagingDirectory)/ui${{ parameters.buildConfig.shortEnvironment }}
+      - task: PublishBuildArtifacts@1
+        inputs:
+          PathtoPublish: $(Build.ArtifactStagingDirectory)
+          ArtifactName: $(Build.DefinitionName)
+          publishLocation: Container

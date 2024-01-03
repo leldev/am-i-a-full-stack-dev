@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "appName": {
+      "value": "lel"
+    },
+    "environmentName": {
+      "value": "dev"
+    },
+    "location": {
+      "value": "centralus"
+    },
+    "locationAbbreviation": {
+      "value": "cus"
+    },
+    "apiAppServicePlanSku": {
+      "value": "F1"
+    },
+    "azureADSqlAdminGroupName": {
+      "value": "SQL-LEL-DEV"
+    },
+    "azureADSqlAdminGroupObjectId": {
+      "value": "4480ba8c-151e-413a-83cd-2dd0cc96c442"
+    },
+    "sqlSkuTier": {
+      "value": "Basic"
+    },
+    "sqlSkuName": {
+      "value": "Basic"
+    },
+    "sqlSkuCapacity": {
+      "value": 5
+    },
+    "sqlSkuFamily": {
+      "value": ""
+    },
+    "customDomainName": {
+      "value": "leldev-online"
+    },
+    "customDomain": {
+      "value": "leldev.online"
+    }
+  }
+}
